@@ -89,6 +89,9 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         "--base_model", help="existing model", type=str, default=None
     )
     parser.add_argument(
+        "--uncertainty_weight", help="weight of uncertainty regularization in loss", type=float, default=1.0
+    )
+    parser.add_argument(
         "--phase_weights",
         help="Dictionary of weights to use for each class label",
         type=str,

@@ -153,7 +153,7 @@ def main() -> None:
     loss_fn = ClassificationLoss(
             weight=[phase_weights[p] for p in p_table.phases],
             label_smoothing=args.label_smoothing,
-            energy_weight=args.energy_weight,
+            uncertainty_weight=args.uncertainty_weight,
             )
     loss_fn.to(device)
     logging.info(loss_fn)
