@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "sbc"
+version = "0.1.0"
+description = "learned collective variables using smooth basin classification"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "mace",
+    ]
+
+
+[tool.setuptools.packages.find]
+include = [
+    "sbc",
+    "sbc.calculators",
+    "sbc.modules",
+    "sbc.tools",
+    "sbc.data",
+    ]
+
+
+[tool.pytest.ini_options]
+log_cli = 0
+addopts = [
+    "--import-mode=append",
+]
+testpaths = ["tests"]
