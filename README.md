@@ -48,4 +48,8 @@ python scripts/run_train_classifier.py \
 ```
 
 # Setup
-A Python environment with `torch`, and `mace` v0.3.0
+Create a Python environment with `torch`, and `mace` v0.3.0.
+Next, install `sbc` directly from Github using
+```sh
+pip install git+https://github.com/molmod/sbc
+```
