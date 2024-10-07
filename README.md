@@ -46,3 +46,6 @@ python scripts/run_train_classifier.py \
     --uncertainty_weight=1.0
 
 ```
+
+# Setup
+A Python environment with `torch`, and `mace` v0.3.0
