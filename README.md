@@ -46,3 +46,10 @@ python scripts/run_train_classifier.py \
     --uncertainty_weight=1.0
 
 ```
+
+# Setup
+Create a Python environment with `torch`, and `mace` v0.3.0.
+Next, install `sbc` directly from Github using
+```sh
+pip install git+https://github.com/molmod/sbc
+```
