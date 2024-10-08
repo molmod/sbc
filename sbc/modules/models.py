@@ -1,6 +1,6 @@
 ###########################################################################################
 # Implementation of MACE models and other models based E(3)-Equivariant MPNNs
-# Authors: Ilyes Batatia, Gregor Simm
+# Authors: Sander Vandenhaute
 # This program is distributed under the MIT License (see MIT.md)
 ###########################################################################################
 

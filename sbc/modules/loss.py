@@ -1,3 +1,10 @@
+###########################################################################################
+# Atomic Data Class for handling molecules as graphs
+# Authors: Sander Vandenhaute
+# This program is distributed under the MIT License (see MIT.md)
+###########################################################################################
+
+
 import torch
 
 from mace.tools import TensorDict

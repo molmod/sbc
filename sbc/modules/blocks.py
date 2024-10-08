@@ -1,3 +1,10 @@
+###########################################################################################
+# Atomic Data Class for handling molecules as graphs
+# Authors: Sander Vandenhaute
+# This program is distributed under the MIT License (see MIT.md)
+###########################################################################################
+
+
 from typing import Optional, Callable
 
 import numpy as np

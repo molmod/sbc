@@ -1,3 +1,10 @@
+###########################################################################################
+# Training script
+# Authors: Sander Vandenhaute
+# This program is distributed under the MIT License (see MIT.md)
+###########################################################################################
+
+
 from __future__ import annotations  # necessary for type-guarding class methods
 from typing import Sequence, Iterable, Optional
 

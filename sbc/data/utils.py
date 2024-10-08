@@ -1,3 +1,10 @@
+###########################################################################################
+# Atomic Data Class for handling molecules as graphs
+# Authors: Ilyes Batatia, Gregor Simm, Sander Vandenhaute
+# This program is distributed under the MIT License (see MIT.md)
+###########################################################################################
+
+
 import logging
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
