@@ -41,10 +41,13 @@ class MACECalculator(Calculator):
         self.device = torch_tools.init_device(device)
         self.energy_units_to_eV = energy_units_to_eV
         self.length_units_to_A = length_units_to_A
-        self.model = torch.load(f=model_path, map_location=device)
+        model = torch.load(f=model_path, map_location=device)
         if default_dtype == 'float64':
-            self.model = self.model.double()
-        self.model.to(device)
+            model = model.double()
+        else:
+            model = model.float()
+        model = model.to(self.device)
+        self.model = model
         self.r_max = float(self.model.r_max)
         self.z_table = utils.AtomicNumberTable(
             [int(z) for z in self.model.atomic_numbers]
