@@ -13,7 +13,7 @@ from mace.tools.scatter import scatter_sum
 
 
 class ClassificationLoss(torch.nn.Module):
-    def __init__(self, weight=None, label_smoothing=0.0, energy_weight=0.0):
+    def __init__(self, weight=None, label_smoothing=0.0, uncertainty_weight=0.0):
         super().__init__()
         if weight is not None:
             weight = torch.tensor(weight, dtype=torch.get_default_dtype())
@@ -22,17 +22,15 @@ class ClassificationLoss(torch.nn.Module):
                 weight=weight,
                 )
         self.register_buffer(
-            'energy_weight', torch.tensor(energy_weight, dtype=torch.get_default_dtype()),
+            'uncertainty_weight', torch.tensor(uncertainty_weight, dtype=torch.get_default_dtype()),
         )
 
     def forward(self, ref: Batch, output: TensorDict) -> torch.Tensor:
-        nl = output['node_logits']
         node_delta = output['node_delta']
-        node_inverse = output['node_inverse']
 
         cross_entropy = self.ce_loss(output['logits'], ref['phase'].to(torch.long))
         RMSE = torch.sqrt(torch.mean(torch.square(node_delta)))
-        return cross_entropy + self.energy_weight * RMSE
+        return cross_entropy + self.uncertainty_weight * RMSE
 
     def __repr__(self):
         return (

@@ -10,7 +10,7 @@ description = "learned collective variables using smooth basin classification"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
-    "mace",
+    "mace-torch==0.3.5",
     ]
 
 

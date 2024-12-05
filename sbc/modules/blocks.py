@@ -157,44 +157,42 @@ class EnergyBasedClassifier(Classifier):
             y = layer(y)
 
         # normalization breaks training!?
-        #node_logits = y - torch.logsumexp(y, dim=-1, keepdim=True)
-        #node_logits = y
-        #node_deltas = y - torch.logsumexp(y, dim=-1, keepdim=True)
         node_deltas = y
-        #node_deltas = (-1.0) * torch.nn.functional.log_softmax(y, dim=-1) # positive 
-        #node_deltas = torch.nn.functional.softplus(y)
-        #node_logits = self.scale * (-1.0) * (node_deltas + data['node_inter_es'].view(-1, 1))
         node_logits = self.scale * (-1.0) * node_deltas
-        #node_logits = y - torch.logsumexp(y, dim=-1, keepdim=True)
-        probabilities = torch.nn.functional.softmax(node_logits, dim=-1)
-        #node_deltas = (-1.0) * node_logits
+        normalization = torch.logsumexp(node_logits, dim=-1, keepdim=True)
+        probabilities = torch.nn.functional.softmax(node_logits - normalization, dim=-1)
         node_delta = torch.sum(probabilities * node_deltas, dim=-1)
-        node_inverse = torch.sum((1 - probabilities) * node_deltas, dim=-1)
         logits = scatter_sum(
-                src=node_logits,
-                index=data['batch'],
-                dim=0,
-                dim_size=data["ptr"].numel() - 1,
+            src=node_logits,
+            index=data['batch'],
+            dim=0,
+            dim_size=data["ptr"].numel() - 1,
+        )
+
+        logits_forces = None
+        logits_stress = None
+        if not self.training:  # otherwise data does not contain positions
+            lognorm = torch.logsumexp(logits, dim=1, keepdim=True)
+            logits_normalized = logits - lognorm
+            grads = []
+            for i in range(len(self.phases)):  # should be trivial
+                grad_outputs = torch.ones(
+                    (data['ptr'].numel() - 1,),
+                    device=data['positions'].device,
                 )
-        deltas = scatter_sum(
-                src=node_deltas,
-                index=data['batch'],
-                dim=0,
-                dim_size=data["ptr"].numel() - 1,
-                )
-        delta = scatter_sum(
-                src=node_delta,
-                index=data['batch'],
-                dim=0,
-                dim_size=data["ptr"].numel() - 1,
-                )
+                grad = torch.autograd.grad(
+                    logits_normalized[:, i],
+                    data['positions'],
+                    grad_outputs=grad_outputs,
+                    retain_graph=True,
+                    create_graph=False,
+                )[0].unsqueeze(0)
+                grads.append(grad)
+            logits_forces = (-1.0) * torch.cat(grads, dim=0)
 
         return {
-                'node_logits': node_logits,
-                'node_deltas': node_deltas,
-                'node_delta': node_delta,
-                'node_inverse': node_inverse,
-                'logits': logits,
-                'deltas': deltas,
-                'delta': delta,
-                }
+            'logits': logits,
+            'logits_forces': logits_forces,
+            'logits_stress': logits_stress,
+            'node_delta': node_delta,
+        }

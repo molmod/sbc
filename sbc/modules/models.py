@@ -103,11 +103,6 @@ class ClassifierMACE(MACE):
                 mixing_layer=classifier_mixing,
                 )
 
-        exponents = [-1.0] + (len(phases) - 1) * [1 / (len(phases) - 1)]
-        self.register_buffer(
-                'exponents', torch.tensor(exponents, dtype=torch.get_default_dtype()),
-                )
-
     @classmethod
     def from_model(cls, model, **kwargs):
         model_kwargs = extract_kwargs(model)
@@ -164,7 +159,7 @@ class ClassifierMACE(MACE):
             shifts=data["shifts"],
         )
         edge_attrs = self.spherical_harmonics(vectors)
-        edge_feats = self.radial_embedding(lengths)
+        edge_feats = self.radial_embedding(lengths, data["node_attrs"], data["edge_index"], self.atomic_numbers)
 
         # Interactions
         node_es_list = []
@@ -214,25 +209,17 @@ class ClassifierMACE(MACE):
             compute_stress=compute_stress,
         )
 
-        cls_out = self.classifier(
+        out = self.classifier(
                 node_feats=node_feats_out,
                 batch=data['batch'],
+                positions=data['positions'],
                 ptr=data['ptr'],
                 node_inter_es=node_inter_es,
                 )
-        logits = cls_out['logits']
-
-        cv = torch.sum(logits * self.exponents.repeat(logits.shape[0], 1), dim=1)
-        cv_forces, cv_virials, cv_stress = get_outputs(
-            energy=cv,
-            positions=data["positions"],
-            displacement=displacement,
-            cell=data["cell"],
-            training=True,
-            compute_force=compute_force,
-            compute_virials=compute_virials,
-            compute_stress=compute_stress,
-        )
+        logits = out['logits']
+        logits_forces = out['logits_forces']
+        logits_stress = out['logits_stress']
+        node_delta = out['node_delta']
 
         output = {
             "energy": total_energy,
@@ -245,9 +232,27 @@ class ClassifierMACE(MACE):
             "displacement": displacement,
             "node_feats": node_feats_out,
             "logits": logits,
-            "CV": cv, 
-            "CV_forces": cv_forces,
-            "CV_stress": cv_stress,
+            "logits_forces": logits_forces,
+            "logits_stress": logits_stress,
+            "node_delta": node_delta,
         }
 
         return output
+
+
+def hills(
+    logits: np.ndarray,
+    centers: np.ndarray,
+    height: float,
+    sigma: float,
+) -> tuple[float, np.ndarray]:
+    assert len(logits) == centers.shape[1]
+    logits = logits.reshape((1, -1))
+
+    delta = logits - centers
+    exponent = (-1.0) * np.sum(delta ** 2, axis=1) / (2 * sigma ** 2)
+    energy = np.sum(height * np.exp(exponent))
+
+    extra = (-1.0) * delta / (2 * sigma ** 2)
+    gradient = np.sum(height * extra * np.exp(exponent), axis=0)
+    return energy, gradient

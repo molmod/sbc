@@ -21,19 +21,15 @@ from mace import data, modules, tools
 from mace.tools import torch_geometric
 from mace.tools.scripts_utils import (
     LRScheduler,
-    #nreate_error_table,
-    #get_dataset_from_xyz,
 )
-#from transfermace.modules import TransferMACE, extract_kwargs
-#from transfermace.tools.arg_parser import build_default_arg_parser
 
-from phace.modules import ClassifierMACE, MultilevelMACE, extract_kwargs
-from phace.modules.loss import ClassificationLoss
-import phace.tools
-from phace.tools.scripts_utils import get_dataset_from_xyz, create_error_table
-from phace.tools.utils import PhaseTable
-from phace.tools.arg_parser import build_default_arg_parser
-from phace.data import FeaturizedData
+from sbc.modules import ClassifierMACE, extract_kwargs
+from sbc.modules.loss import ClassificationLoss
+from sbc.tools.scripts_utils import get_dataset_from_xyz
+from sbc.tools.utils import PhaseTable
+from sbc.tools.arg_parser import build_default_arg_parser
+from sbc.tools.train_classifier import train
+from sbc.data import FeaturizedData
 
 
 def main() -> None:
@@ -144,7 +140,7 @@ def main() -> None:
     model = ClassifierMACE.from_model(
             base_model,
             phases=p_table.phases,
-            classifier=args.classifier, 
+            classifier=args.classifier,
             classifier_readout=classifier_readout,
             classifier_mixing=classifier_mixing,
             )
@@ -205,7 +201,21 @@ def main() -> None:
         drop_last=False,
     )
 
-    phace.tools.train(
+    checkpoint_handler = tools.CheckpointHandler(
+        directory=args.checkpoints_dir,
+        tag=tag,
+        keep=args.keep_checkpoints,
+        swa_start=args.start_swa,
+    )
+    logger = tools.MetricsLogger(directory=args.results_dir, tag=tag + "_train")
+    output_args = {
+        'energy': True,
+        'forces': True,
+        'stress': True,
+        'virials': True,
+        'dipoles': False,
+    }
+    train(
         model=model,
         loss_fn=loss_fn,
         train_loader=train_loader,
@@ -217,6 +227,11 @@ def main() -> None:
         patience=args.patience,
         device=device,
         max_grad_norm=args.clip_grad,
+        # start_epoch=0,
+        # checkpoint_handler=checkpoint_handler,
+        # logger=logger,
+        # output_args=output_args,
+        # log_errors=args.error_table,
     )
 
     model = model.to("cpu")
