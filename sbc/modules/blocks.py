@@ -134,29 +134,29 @@ class SimpleClassifier(Classifier):
                 }
 
 
+@compile_mode("script")
 class EnergyBasedClassifier(Classifier):
 
-    def forward(self, **data: torch.Tensor) -> TensorDict:
+    def forward(self, data: dict[str, torch.Tensor]) -> dict[str, Optional[torch.Tensor]]:
         node_feats = data['node_feats']
 
-        features = []  # from mace/modules/utils.py#L171
-        for i in range(self.num_interactions - 1):
-            features.append(
-                node_feats[
-                    :,
-                    i
-                    * (self.l_max + 1) ** 2  # 1, 1 + 3, 1 + 3 + 5, ...
-                    * self.num_features : ((i + 1) * (self.l_max + 1) ** 2)
-                    * self.num_features,
-                ]
-            )
-        features.append(node_feats[:, -self.num_features:])
+        # Calculate sizes with explicit integer casting
+        split_size = int((self.l_max + 1) ** 2 * self.num_features)
+        split_sizes = torch.jit.annotate(list[int], [])
+        for _ in range(self.num_interactions - 1):
+            split_sizes.append(split_size)
+        split_sizes.append(int(self.num_features))
+        features: list[torch.Tensor] = list(torch.split(node_feats, split_sizes, dim=1))
 
-        y = torch.cat([read(f) for read, f in zip(self.readouts, features)], dim=-1)
+        # Process features using enumeration
+        tensors_to_cat: list[torch.Tensor] = []
+        for i, readout in enumerate(self.readouts):
+            tensors_to_cat.append(readout(features[i]))
+
+        y = torch.cat(tensors_to_cat, dim=-1)
         for layer in self.mix:
             y = layer(y)
 
-        # normalization breaks training!?
         node_deltas = y
         node_logits = self.scale * (-1.0) * node_deltas
         normalization = torch.logsumexp(node_logits, dim=-1, keepdim=True)
@@ -169,26 +169,44 @@ class EnergyBasedClassifier(Classifier):
             dim_size=data["ptr"].numel() - 1,
         )
 
-        logits_forces = None
-        logits_stress = None
-        if not self.training:  # otherwise data does not contain positions
+        logits_forces: Optional[torch.Tensor] = None
+        logits_stress: Optional[torch.Tensor] = None
+        if not self.training:
             lognorm = torch.logsumexp(logits, dim=1, keepdim=True)
             logits_normalized = logits - lognorm
-            grads = []
-            for i in range(len(self.phases)):  # should be trivial
-                grad_outputs = torch.ones(
+            grads: list[torch.Tensor] = []
+            all_grads_valid = True
+
+            for i in range(len(self.phases)):
+                grad_output = torch.ones(
                     (data['ptr'].numel() - 1,),
                     device=data['positions'].device,
                 )
-                grad = torch.autograd.grad(
-                    logits_normalized[:, i],
-                    data['positions'],
+
+                grad_outputs: Optional[list[Optional[torch.Tensor]]] = [grad_output]
+                grad_result = torch.autograd.grad(
+                    outputs=[logits_normalized[:, i]],
+                    inputs=[data['positions']],
                     grad_outputs=grad_outputs,
                     retain_graph=True,
                     create_graph=False,
-                )[0].unsqueeze(0)
-                grads.append(grad)
-            logits_forces = (-1.0) * torch.cat(grads, dim=0)
+                )
+
+                # Safely handle the gradient result
+                if grad_result is not None and len(grad_result) > 0:
+                    grad = grad_result[0]
+                    if grad is not None:
+                        grads.append(grad.unsqueeze(0))
+                    else:
+                        all_grads_valid = False
+                        break
+                else:
+                    all_grads_valid = False
+                    break
+
+            # Only create logits_forces if all gradients were valid
+            if all_grads_valid and len(grads) > 0:
+                logits_forces = (-1.0) * torch.cat(grads, dim=0)
 
         return {
             'logits': logits,

@@ -121,7 +121,7 @@ class AtomicData(data.AtomicData):
         p_table: PhaseTable,
         cutoff: float,
     ) -> "AtomicData":
-        edge_index, shifts, unit_shifts = data.get_neighborhood(
+        edge_index, shifts, unit_shifts, cell = data.get_neighborhood(
             positions=config.positions, cutoff=cutoff, pbc=config.pbc, cell=config.cell
         )
         indices = atomic_numbers_to_indices(config.atomic_numbers, z_table=z_table)
@@ -132,7 +132,7 @@ class AtomicData(data.AtomicData):
 
         cell = (
             torch.tensor(config.cell, dtype=torch.get_default_dtype())
-            if config.cell is not None
+            if cell is not None
             else torch.tensor(
                 3 * [0.0, 0.0, 0.0], dtype=torch.get_default_dtype()
             ).view(3, 3)
@@ -246,20 +246,17 @@ def get_data_loader(
 class FeaturizedData(data.AtomicData):
     node_feats: torch.Tensor
     phase: torch.Tensor
-    node_inter_es: torch.Tensor
 
     def __init__(
             self, 
             node_feats: torch.Tensor, # [n_nodes, *]
             phase: torch.Tensor, # [, ] index from p_table; torch.long
-            node_inter_es: torch.Tensor,
             ):
         num_nodes = node_feats.shape[0]
         data = {
                 'num_nodes': num_nodes,
                 'node_feats': node_feats,
                 'phase': phase,
-                'node_inter_es': node_inter_es,
                 }
         torch_geometric.data.Data.__init__(self, **data)
 
@@ -283,5 +280,4 @@ class FeaturizedData(data.AtomicData):
         return cls(
                 node_feats=output['node_feats'].detach().cpu(),
                 phase=batch['phase'].cpu(),
-                node_inter_es=output['node_interaction_energy'].detach().cpu(),
                 )

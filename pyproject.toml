@@ -8,9 +8,9 @@ name = "sbc"
 version = "0.1.0"
 description = "learned collective variables using smooth basin classification"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
-    "mace-torch==0.3.5",
+    "mace-torch==0.3.8",
     ]
 
 

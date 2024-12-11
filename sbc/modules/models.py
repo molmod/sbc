@@ -27,6 +27,11 @@ from mace.modules.blocks import (
     NonLinearReadoutBlock,
     RadialEmbeddingBlock,
     ScaleShiftBlock,
+    AgnesiTransform,
+    SoftTransform,
+    BesselBasis,
+    GaussianBasis,
+    ChebychevBasis
 )
 from mace.modules.utils import (
     compute_fixed_charge_dipole,
@@ -40,6 +45,27 @@ from sbc.modules.blocks import SimpleClassifier, EnergyBasedClassifier
 
 
 def extract_kwargs(model):
+    if hasattr(model.radial_embedding, 'distance_transform'):
+        transform = model.radial_embedding.distance_transform
+        if type(transform) is AgnesiTransform:
+            distance_transform = 'Agnesi'
+        elif type(transform) is SoftTransform:
+            distance_transform = 'Soft'
+        else:
+            raise ValueError('unknown transform {}'.format(transform))
+    else:
+        distance_transform = 'None'
+
+    bessel_fn = model.radial_embedding.bessel_fn
+    if type(bessel_fn) is BesselBasis:
+        radial_type = 'bessel'
+    elif type(bessel_fn) is GaussianBasis:
+        radial_type = 'gaussian'
+    elif type(bessel_fn) is ChebychevBasis:
+        radial_type = 'chebychev'
+    else:
+        raise ValueError('unknown basis {}'.format(bessel_fn))
+
     kwargs = {
             'r_max': model.radial_embedding.bessel_fn.r_max.item(),
             'num_bessel': torch.numel(model.radial_embedding.bessel_fn.bessel_weights),
@@ -57,6 +83,10 @@ def extract_kwargs(model):
             'correlation': model.products[0].symmetric_contractions.contractions[0].correlation,
             'gate': torch.nn.functional.silu, # hardcoded
             'radial_MLP': model.interactions[0].radial_MLP,
+            'radial_type': radial_type,
+            'pair_repulsion': model.pair_repulsion,
+            'distance_transform': distance_transform,
+            'heads': None,
             }
     if hasattr(model, 'scale_shift'):
         kwargs['atomic_inter_scale'] = model.scale_shift.scale.item()
@@ -121,11 +151,18 @@ class ClassifierMACE(MACE):
         compute_virials: bool = False,
         compute_stress: bool = False,
         compute_displacement: bool = False,
+        compute_hessian: bool = False,
     ) -> Dict[str, Optional[torch.Tensor]]:
         # Setup
-        data["positions"].requires_grad_(True)
         data["node_attrs"].requires_grad_(True)
+        data["positions"].requires_grad_(True)
+        num_atoms_arange = torch.arange(data["positions"].shape[0])
         num_graphs = data["ptr"].numel() - 1
+        node_heads = (
+            data["head"][data["batch"]]
+            if "head" in data
+            else torch.zeros_like(data["batch"])
+        )
         displacement = torch.zeros(
             (num_graphs, 3, 3),
             dtype=data["positions"].dtype,
@@ -146,10 +183,12 @@ class ClassifierMACE(MACE):
             )
 
         # Atomic energies
-        node_e0 = self.atomic_energies_fn(data["node_attrs"])
+        node_e0 = self.atomic_energies_fn(data["node_attrs"])[
+            num_atoms_arange, node_heads
+        ]
         e0 = scatter_sum(
-            src=node_e0, index=data["batch"], dim=-1, dim_size=num_graphs
-        )  # [n_graphs,]
+            src=node_e0, index=data["batch"], dim=0, dim_size=num_graphs
+        )  # [n_graphs, num_heads]
 
         # Embeddings
         node_feats = self.node_embedding(data["node_attrs"])
@@ -159,13 +198,20 @@ class ClassifierMACE(MACE):
             shifts=data["shifts"],
         )
         edge_attrs = self.spherical_harmonics(vectors)
-        edge_feats = self.radial_embedding(lengths, data["node_attrs"], data["edge_index"], self.atomic_numbers)
-
+        edge_feats = self.radial_embedding(
+            lengths, data["node_attrs"], data["edge_index"], self.atomic_numbers
+        )
+        if hasattr(self, "pair_repulsion"):
+            pair_node_energy = self.pair_repulsion_fn(
+                lengths, data["node_attrs"], data["edge_index"], self.atomic_numbers
+            )
+        else:
+            pair_node_energy = torch.zeros_like(node_e0)
         # Interactions
-        node_es_list = []
+        node_es_list = [pair_node_energy]
         node_feats_list = []
         for interaction, product, readout in zip(
-            self.interactions, self.products, self.readouts,
+            self.interactions, self.products, self.readouts
         ):
             node_feats, sc = interaction(
                 node_attrs=data["node_attrs"],
@@ -178,16 +224,17 @@ class ClassifierMACE(MACE):
                 node_feats=node_feats, sc=sc, node_attrs=data["node_attrs"]
             )
             node_feats_list.append(node_feats)
-            node_es_list.append(readout(node_feats).squeeze(-1))  # {[n_nodes, ], }
+            node_es_list.append(
+                readout(node_feats, node_heads)[num_atoms_arange, node_heads]
+            )  # {[n_nodes, ], }
 
         # Concatenate node features
         node_feats_out = torch.cat(node_feats_list, dim=-1)
-
         # Sum over interactions
         node_inter_es = torch.sum(
             torch.stack(node_es_list, dim=0), dim=0
         )  # [n_nodes, ]
-        node_inter_es = self.scale_shift(node_inter_es)
+        node_inter_es = self.scale_shift(node_inter_es, node_heads)
 
         # Sum over nodes in graph
         inter_e = scatter_sum(
@@ -197,8 +244,7 @@ class ClassifierMACE(MACE):
         # Add E_0 and (scaled) interaction energy
         total_energy = e0 + inter_e
         node_energy = node_e0 + node_inter_es
-
-        forces, virials, stress = get_outputs(
+        forces, virials, stress, hessian = get_outputs(
             energy=inter_e,
             positions=data["positions"],
             displacement=displacement,
@@ -207,15 +253,16 @@ class ClassifierMACE(MACE):
             compute_force=compute_force,
             compute_virials=compute_virials,
             compute_stress=compute_stress,
+            compute_hessian=compute_hessian,
         )
 
-        out = self.classifier(
-                node_feats=node_feats_out,
-                batch=data['batch'],
-                positions=data['positions'],
-                ptr=data['ptr'],
-                node_inter_es=node_inter_es,
-                )
+        cls_data = {
+            'node_feats': node_feats_out,
+            'batch': data['batch'],
+            'ptr': data['ptr'],
+            'positions': data['positions'],
+        }
+        out = self.classifier(cls_data)
         logits = out['logits']
         logits_forces = out['logits_forces']
         logits_stress = out['logits_stress']
@@ -225,11 +272,11 @@ class ClassifierMACE(MACE):
             "energy": total_energy,
             "node_energy": node_energy,
             "interaction_energy": inter_e,
-            "node_interaction_energy": node_inter_es,
             "forces": forces,
             "virials": virials,
             "stress": stress,
             "displacement": displacement,
+            "hessian": hessian,
             "node_feats": node_feats_out,
             "logits": logits,
             "logits_forces": logits_forces,

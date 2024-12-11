@@ -55,6 +55,7 @@ def main() -> None:
 
     # Data preparation
     collections, atomic_energies_dict = get_dataset_from_xyz(
+        work_dir=str(Path.cwd()),
         train_path=args.train_file,
         valid_path=args.valid_file,
         valid_fraction=args.valid_fraction,

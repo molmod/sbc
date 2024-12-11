@@ -8,7 +8,9 @@
 from pathlib import Path
 from typing import Optional
 import torch
+from e3nn.util import jit
 import numpy as np
+from scipy.special import logsumexp
 
 from ase.units import GPa
 from ase.stress import full_3x3_to_voigt_6_stress
@@ -143,6 +145,30 @@ def hills(
     return energy, gradient
 
 
+# def divergence(
+#     logits: np.ndarray,
+#     centers: np.ndarray,
+#     height: float,
+#     sigma: float,
+# ) -> tuple[float, np.ndarray]:
+#     if len(centers.shape) == 1:
+#         centers = centers.reshape(1, -1)
+#     assert len(logits.shape) == 1
+#     assert len(logits) == centers.shape[1]
+#     logits = logits.reshape((1, -1))
+#
+#     probabilities = np.exp(centers)
+#     assert np.allclose(np.sum(probabilities, axis=1) - 1, 0.0, atol=1e-3)
+#
+#     div_KL = np.sum(probabilities * (centers - logits), axis=1, keepdims=True)
+#     exponent = (-1.0) * div_KL / sigma
+#     energy = height * np.sum(np.exp(exponent))
+#
+#     extra = probabilities / sigma
+#     gradient = np.sum(height * np.exp(exponent) * extra, axis=0)
+#     return energy, gradient
+
+
 class MetadynamicsCalculator(MACECalculator):
     implemented_properties = [
         'free_energy',
@@ -161,6 +187,7 @@ class MetadynamicsCalculator(MACECalculator):
         ):
         super().__init__(**kwargs)
         self.model.eval()
+        self.model = jit.compile(self.model)
         self.p_table = PhaseTable(self.model.classifier.phases)
         self.height = height
         self.sigma = sigma
@@ -191,6 +218,7 @@ class MetadynamicsCalculator(MACECalculator):
         bias_stress = np.zeros(6)
         if self.path_hills.exists():
             centers = np.loadtxt(self.path_hills)
+
             bias_energy, gradients = hills(logits, centers, self.height, self.sigma)
             bias_forces = np.einsum('i,ijk->jk', gradients, logits_forces)
             bias_stress = np.einsum('i,ijk->jk', gradients, logits_stress)

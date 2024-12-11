@@ -29,6 +29,7 @@ class SubsetCollection:
 
 
 def get_dataset_from_xyz(
+    work_dir: str,
     train_path: str,
     valid_path: str,
     valid_fraction: float,
@@ -78,7 +79,7 @@ def get_dataset_from_xyz(
             "Using random %s%% of training set for validation", 100 * valid_fraction
         )
         train_configs, valid_configs = mace.data.random_train_valid_split(
-            all_train_configs, valid_fraction, seed
+            all_train_configs, valid_fraction, seed, work_dir,
         )
 
     test_configs = []

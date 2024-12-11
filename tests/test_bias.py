@@ -24,10 +24,10 @@ config_template = dict(
     num_polynomial_cutoff=6,
     max_ell=2,
     interaction_cls=modules.interaction_classes[
-        "RealAgnosticResidualInteractionBlock"
+        "RealAgnosticDensityResidualInteractionBlock"
     ],
     interaction_cls_first=modules.interaction_classes[
-        "RealAgnosticResidualInteractionBlock"
+        "RealAgnosticDensityInteractionBlock"
     ],
     num_interactions=5,
     num_elements=2,
@@ -40,6 +40,9 @@ config_template = dict(
     correlation=3,
     atomic_inter_scale=1.0,
     atomic_inter_shift=0.0,
+    pair_repulsion=True,
+    # distance_transform='Agnesi',  # disable, or initial logits ~ 1e20 somehow
+    radial_type='bessel',
 )
 
 def test_classifier_mace(tmp_path):
@@ -73,14 +76,11 @@ def test_classifier_mace(tmp_path):
             )
     batch = next(iter(sbc.data.get_data_loader([data0, data1], batch_size=2)))
 
+    model.eval()  # compute logit forces
     model_output = model(batch)
-    logits, _, _ = model.classifier(
-            node_feats=model_output['node_feats'],
-            batch=batch['batch'],
-            positions=batch['positions'],
-            ptr=batch['ptr'],
-            )
-    logits  = logits.detach().cpu().numpy()
+    batch['node_feats'] = model_output['node_feats']
+    cls_output = model.classifier(batch)
+    logits  = cls_output['logits'].detach().cpu().numpy()
     logits_ = model_output['logits'].detach().cpu().numpy()
     assert np.allclose(logits, logits_)
     assert not np.allclose(logits, 0)
@@ -193,6 +193,42 @@ def test_hills_function():
     sigma = 1
 
     func = functools.partial(hills, centers=centers, height=height, sigma=sigma)
-    assert func(np.random.uniform(size=(3,))) > 0.0
+    assert func(np.random.uniform(size=(3,)))[0] > 0.0
     output = check_grad(func, np.random.uniform(size=(3,)))
     assert output['is_correct']
+
+
+def test_load_model():
+    model = modules.ScaleShiftMACE(**config_template)
+    kwargs = {
+        'phases': ['A', 'B'],
+        'classifier': 'EnergyBasedClassifier',
+        'classifier_readout': [16],
+        'classifier_mixing': None,
+    }
+    cls_model = ClassifierMACE.from_model(
+        model,
+        **kwargs,
+    )
+
+    # create some data and evaluate energy
+    atoms = Atoms(
+        numbers=[8, 1, 1],
+        positions=np.eye(3),
+        pbc=False,
+    )
+    data = sbc.data.AtomicData.from_config(
+        sbc.data.config_from_atoms(atoms),
+        z_table=table,
+        p_table=sbc.tools.PhaseTable(['A', 'B']),
+        cutoff=5.0,
+    )
+    batch = next(iter(sbc.data.get_data_loader([data], batch_size=1)))
+
+    model.eval()  # compute logit forces
+    out = model(batch)
+    e0 = out['interaction_energy'].detach().cpu().numpy()
+
+    out = cls_model(batch)
+    e1 = out['interaction_energy'].detach().cpu().numpy()
+    assert np.allclose(e0, e1)

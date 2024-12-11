@@ -124,17 +124,14 @@ def take_step(
     batch = batch.to(device)
     optimizer.zero_grad(set_to_none=True)
     batch_dict = batch.to_dict()
-    output = model.classifier(
-            batch=batch_dict['batch'],
-            ptr=batch_dict['ptr'],
-            node_feats=batch_dict['node_feats'],
-            node_inter_es=batch_dict['node_inter_es'],
-            )
+    cls_data = dict(
+        batch=batch_dict['batch'],
+        ptr=batch_dict['ptr'],
+        node_feats=batch_dict['node_feats'],
+    )
+    output = model.classifier(cls_data)
     loss = loss_fn(output=output, ref=batch)
     loss.backward()
-    #for name, value in model.classifier.parameters().items():
-    #    print(name)
-    #    print(value.grad)
     if max_grad_norm is not None:
         torch.nn.utils.clip_grad_norm_(model.classifier.parameters(), max_norm=max_grad_norm)
     optimizer.step()
@@ -164,12 +161,12 @@ def evaluate(
     for batch in data_loader:
         batch = batch.to(device)
         batch_dict = batch.to_dict()
-        output = model.classifier(
-                batch=batch_dict['batch'],
-                ptr=batch_dict['ptr'],
-                node_feats=batch_dict['node_feats'],
-                node_inter_es=batch_dict['node_inter_es'],
-                )
+        cls_data = dict(
+            batch=batch_dict['batch'],
+            ptr=batch_dict['ptr'],
+            node_feats=batch_dict['node_feats'],
+        )
+        output = model.classifier(cls_data)
 
         loss = loss_fn(output=output, ref=batch)
         total_loss += to_numpy(loss).item()
