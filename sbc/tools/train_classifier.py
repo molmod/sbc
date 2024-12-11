@@ -78,7 +78,8 @@ def train(
             for phase in model.classifier.phases:
                 key = 'acc({})'.format(phase)
                 value = eval_metrics[key]
-                s += '{}: {:4.3f}'.format(key, value)
+                if value is not None:
+                    s += '{}: {:4.3f}'.format(key, value)
                 s += ' | '
             for key in ['CE', 'RMSE(e)']: 
                 s += '{}: {:5.3f}'.format(key, eval_metrics[key])
