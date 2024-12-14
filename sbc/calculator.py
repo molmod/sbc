@@ -193,6 +193,7 @@ class MetadynamicsCalculator(MACECalculator):
         sigma: float,
         frequency: int,
         use_svd: bool = False,
+        svd_dimensions: int = 2,
         **kwargs,
         ):
         super().__init__(**kwargs)
@@ -202,6 +203,7 @@ class MetadynamicsCalculator(MACECalculator):
         self.sigma = sigma
         self.frequency = frequency
         self.use_svd = use_svd
+        self.svd_dimensions = 2
         self.path_hills = path_hills
 
         self.counter = 0
@@ -260,8 +262,7 @@ class MetadynamicsCalculator(MACECalculator):
             if self.counter % self.frequency == 0:  # add hill
                 if self.use_svd:
                     U, sigma, Vh = np.linalg.svd(logits_forces.reshape(nphases, -1))
-                    # ncomponents = 2
-                    vectors = U.T[2].flatten()  # transpose to get vectors as rows
+                    vectors = U.T[:self.svd_dimensions].flatten()  # transpose to get vectors as rows
                     centers = logits
                     line = ' '.join([str(c) for c in np.concatenate((centers, vectors))])
                 else:
