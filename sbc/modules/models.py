@@ -41,7 +41,7 @@ from mace.modules.utils import (
     get_symmetric_displacement,
 )
 
-from sbc.modules.blocks import SimpleClassifier, EnergyBasedClassifier
+from sbc.modules.blocks import ClassifierBlock
 
 
 def extract_kwargs(model):
@@ -99,7 +99,6 @@ def extract_kwargs(model):
     return kwargs
 
 
-@compile_mode("script")
 class ClassifierMACE(MACE):
     def __init__(
         self,
@@ -108,9 +107,7 @@ class ClassifierMACE(MACE):
         atomic_inter_scale: float,
         atomic_inter_shift: float,
         phases: list[str],
-        classifier: str,
-        classifier_readout: list[int],
-        classifier_mixing: Optional[int],
+        classifier_layer_sizes: list[int],
         **kwargs,
     ):
         super().__init__(
@@ -121,16 +118,11 @@ class ClassifierMACE(MACE):
         self.scale_shift = ScaleShiftBlock(
             scale=atomic_inter_scale, shift=atomic_inter_shift
         )
-        if classifier == 'SimpleClassifier':
-            classifier_cls = SimpleClassifier
-        elif classifier == 'EnergyBasedClassifier':
-            classifier_cls = EnergyBasedClassifier
-        self.classifier = classifier_cls(
+        self.classifier = ClassifierBlock(
                 phases=phases,
                 num_interactions=num_interactions,
                 hidden_irreps=hidden_irreps,
-                readout_layers=classifier_readout,
-                mixing_layer=classifier_mixing,
+                layer_sizes=classifier_layer_sizes,
                 )
 
     @classmethod

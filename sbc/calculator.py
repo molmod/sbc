@@ -129,19 +129,28 @@ def hills(
     centers: np.ndarray,
     height: float,
     sigma: float,
+    vectors: Optional[np.ndarray] = None
 ) -> tuple[float, np.ndarray]:
-    if len(centers.shape) == 1:
-        centers = centers.reshape(1, -1)
     assert len(logits.shape) == 1
+    nphases = len(logits)
     assert len(logits) == centers.shape[1]
     logits = logits.reshape((1, -1))
 
     delta = logits - centers
-    exponent = (-1.0) * np.sum(delta ** 2, axis=1, keepdims=True) / (2 * sigma ** 2)
+
+    if vectors is not None:
+        projected = np.einsum('ijk,ik->ij', vectors, delta)
+        distances = np.sum(projected ** 2, axis=1, keepdims=True)
+        extra = (-1.0) * np.einsum('ij,ijk->ik', projected, vectors) / sigma ** 2
+    else:
+        distances = np.sum(delta ** 2, axis=1, keepdims=True)
+        extra = (-1.0) * delta / sigma ** 2
+
+    exponent = (-1.0) * distances / (2 * sigma ** 2)
     energy = np.sum(height * np.exp(exponent))
 
-    extra = (-1.0) * delta / sigma ** 2
-    gradient = np.sum(height * extra * np.exp(exponent), axis=0)
+    # extra = (-1.0) * delta / sigma ** 2
+    gradient = np.sum(height * extra * np.exp(exponent).reshape(-1, 1), axis=0)
     return energy, gradient
 
 
@@ -183,15 +192,16 @@ class MetadynamicsCalculator(MACECalculator):
         height: float,
         sigma: float,
         frequency: int,
+        use_svd: bool = False,
         **kwargs,
         ):
         super().__init__(**kwargs)
         self.model.eval()
-        self.model = jit.compile(self.model)
         self.p_table = PhaseTable(self.model.classifier.phases)
         self.height = height
         self.sigma = sigma
         self.frequency = frequency
+        self.use_svd = use_svd
         self.path_hills = path_hills
 
         self.counter = 0
@@ -216,10 +226,28 @@ class MetadynamicsCalculator(MACECalculator):
         bias_energy = 0.0
         bias_forces = np.zeros_like(forces)
         bias_stress = np.zeros(6)
+        nphases = len(logits)
         if self.path_hills.exists():
-            centers = np.loadtxt(self.path_hills)
+            hills_data = np.loadtxt(self.path_hills)
+            if len(hills_data.shape) == 1:
+                nhills = 1
+            else:
+                nhills = hills_data.shape[0]
+            hills_data = hills_data.reshape((nhills, -1))
+            if self.use_svd:
+                centers = hills_data[:, :nphases]
+                vectors = hills_data[:, nphases:].reshape(nhills, -1, nphases)
+            else:
+                centers = hills_data
+                vectors = None
 
-            bias_energy, gradients = hills(logits, centers, self.height, self.sigma)
+            bias_energy, gradients = hills(
+                logits,
+                centers,
+                self.height,
+                self.sigma,
+                vectors=vectors,
+            )
             bias_forces = np.einsum('i,ijk->jk', gradients, logits_forces)
             bias_stress = np.einsum('i,ijk->jk', gradients, logits_stress)
             bias_stress = full_3x3_to_voigt_6_stress(bias_stress)
@@ -230,8 +258,16 @@ class MetadynamicsCalculator(MACECalculator):
             stress += bias_stress
 
             if self.counter % self.frequency == 0:  # add hill
+                if self.use_svd:
+                    U, sigma, Vh = np.linalg.svd(logits_forces.reshape(nphases, -1))
+                    # ncomponents = 2
+                    vectors = U.T[2].flatten()  # transpose to get vectors as rows
+                    centers = logits
+                    line = ' '.join([str(c) for c in np.concatenate((centers, vectors))])
+                else:
+                    line = ' '.join([str(c) for c in logits])
                 with open(self.path_hills, "a") as f:
-                    f.write(' '.join([str(c) for c in logits]))
+                    f.write(line)
                     f.write('\n')
 
         self.counter += 1

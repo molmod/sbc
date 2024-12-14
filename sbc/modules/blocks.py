@@ -6,6 +6,7 @@
 
 
 from typing import Optional, Callable
+import functools
 
 import numpy as np
 import torch
@@ -17,148 +18,65 @@ from mace.tools import TensorDict
 from mace.tools.scatter import scatter_sum, scatter_mean
 
 
-@compile_mode("script")
-class InvariantClassifierReadoutBlock(torch.nn.Module):
-    def __init__(
-            self, irreps_in: o3.Irreps, layers: list[int]):
-        super().__init__()
-        assert len(layers) > 0
-        self.layers = torch.nn.ModuleList()
+class ClassifierBlock(torch.nn.Module):
 
-        for size in layers:
-            irreps = o3.Irreps('{}x0e'.format(size))
-            self.layers.append(o3.Linear(irreps_in=irreps_in, irreps_out=irreps))
-            self.layers.append(nn.Activation(irreps_in=irreps, acts=[torch.nn.functional.silu]))
-            irreps_in = irreps
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:  # [n_nodes, irreps]  # [..., ]
-        for layer in self.layers:
-            x = layer(x)
-        return x
-
-
-@compile_mode('script')
-class Classifier(torch.nn.Module):
     def __init__(
             self,
             phases: list[str],
             num_interactions: int,
             hidden_irreps: o3.Irreps,
-            readout_layers: list[int],
-            mixing_layer: Optional[int],
+            layer_sizes: list[int],
             ):
         super().__init__()
         self.phases = phases
-        self.num_interactions = num_interactions
-        self.readout_layers = readout_layers
-        self.mixing_layer = mixing_layer
-
         self.l_max = max([ir[1][0] for ir in hidden_irreps])
         self.num_features = hidden_irreps[0].dim
 
-        self.readouts = torch.nn.ModuleList()
-        for irreps in [hidden_irreps] * (num_interactions - 1) + [hidden_irreps[:1]]:
-            block = InvariantClassifierReadoutBlock(
-                irreps,
-                readout_layers,
-                )
-            self.readouts.append(block)
+        # Create indices to select scalar (l=0) features
+        features_per_l = [(2 * l + 1) * self.num_features for l in range(self.l_max + 1)]
+        total_features_per_block = sum(features_per_l)
 
-        self.mix = torch.nn.ModuleList()
-        if mixing_layer is not None:
-            self.mix.append(torch.nn.Linear(
-                in_features=(num_interactions * readout_layers[-1]),
-                out_features=mixing_layer,
-                ))
-            self.mix.append(torch.nn.SiLU())
-            self.mix.append(torch.nn.Linear(in_features=mixing_layer, out_features=len(phases), bias=False))
-        else:
-            self.mix.append(torch.nn.Linear(in_features=num_interactions * readout_layers[-1], out_features=len(phases), bias=True))
-        self.register_buffer('scale', torch.nn.Parameter(torch.tensor(1.0, dtype=torch.get_default_dtype())))
+        # Create selection indices
+        indices = []
+        curr_idx = 0
+        for i in range(num_interactions - 1):
+            # For each interaction block, select l=0 features
+            indices.extend(range(curr_idx, curr_idx + features_per_l[0]))
+            curr_idx += total_features_per_block
 
+        # For final interaction, all features are l=0
+        indices.extend(range(curr_idx, curr_idx + self.num_features))
 
-class SimpleClassifier(Classifier):
+        indices = torch.tensor(indices, dtype=torch.long)
+        self.register_buffer('scalar_indices', indices)
 
-    def forward(self, **data: torch.Tensor) -> TensorDict:
-        node_feats = data['node_feats']
+        # Calculate total number of scalar features for MLP input
+        num_scalar_features = len(indices)
 
-        features = []  # from mace/modules/utils.py#L171
-        for i in range(self.num_interactions - 1):
-            features.append(
-                node_feats[
-                    :,
-                    i
-                    * (self.l_max + 1) ** 2  # 1, 1 + 3, 1 + 3 + 5, ...
-                    * self.num_features : ((i + 1) * (self.l_max + 1) ** 2)
-                    * self.num_features,
-                ]
-            )
-        features.append(node_feats[:, -self.num_features:])
-
-        y = torch.cat([read(f) for read, f in zip(self.readouts, features)], dim=-1)
-        for layer in self.mix:
-            y = layer(y)
-
-        # normalization breaks training!?
-        #node_logits = y - torch.logsumexp(y, dim=-1, keepdim=True)
-        node_logits = y
-        probabilities = torch.nn.functional.softmax(node_logits, dim=-1)
-        node_deltas = (-1.0) * node_logits
-        node_delta = torch.sum(probabilities * node_deltas, dim=-1)
-        logits = scatter_sum(
-                src=node_logits,
-                index=data['batch'],
-                dim=0,
-                dim_size=data["ptr"].numel() - 1,
-                )
-        deltas = scatter_sum(
-                src=node_deltas,
-                index=data['batch'],
-                dim=0,
-                dim_size=data["ptr"].numel() - 1,
-                )
-        delta = scatter_sum(
-                src=node_delta,
-                index=data['batch'],
-                dim=0,
-                dim_size=data["ptr"].numel() - 1,
-                )
-
-        return {
-                'node_logits': node_logits,
-                'node_deltas': node_deltas,
-                'node_delta': node_delta,
-                'logits': logits,
-                'deltas': deltas,
-                'delta': delta,
-                }
-
-
-@compile_mode("script")
-class EnergyBasedClassifier(Classifier):
+        # Build MLP layers
+        layers = []
+        prev_size = num_scalar_features
+        for size in layer_sizes:
+            layers.append(torch.nn.Linear(prev_size, size))
+            layers.append(torch.nn.SiLU())
+            prev_size = size
+        # Final layer to output phase logits
+        layers.append(torch.nn.Linear(prev_size, len(phases)))
+        self.layers = torch.nn.ModuleList(layers)
 
     def forward(self, data: dict[str, torch.Tensor]) -> dict[str, Optional[torch.Tensor]]:
         node_feats = data['node_feats']
 
-        # Calculate sizes with explicit integer casting
-        split_size = int((self.l_max + 1) ** 2 * self.num_features)
-        split_sizes = torch.jit.annotate(list[int], [])
-        for _ in range(self.num_interactions - 1):
-            split_sizes.append(split_size)
-        split_sizes.append(int(self.num_features))
-        features: list[torch.Tensor] = list(torch.split(node_feats, split_sizes, dim=1))
+        # Select only scalar features using indices
+        scalar_feats = node_feats[:, self.scalar_indices]
 
-        # Process features using enumeration
-        tensors_to_cat: list[torch.Tensor] = []
-        for i, readout in enumerate(self.readouts):
-            tensors_to_cat.append(readout(features[i]))
-
-        y = torch.cat(tensors_to_cat, dim=-1)
-        for layer in self.mix:
+        # Process through MLP layers
+        y = scalar_feats
+        for layer in self.layers:
             y = layer(y)
 
         node_deltas = y
-        node_logits = self.scale * (-1.0) * node_deltas
+        node_logits = (-1.0) * node_deltas
         normalization = torch.logsumexp(node_logits, dim=-1, keepdim=True)
         probabilities = torch.nn.functional.softmax(node_logits - normalization, dim=-1)
         node_delta = torch.sum(probabilities * node_deltas, dim=-1)
@@ -171,42 +89,26 @@ class EnergyBasedClassifier(Classifier):
 
         logits_forces: Optional[torch.Tensor] = None
         logits_stress: Optional[torch.Tensor] = None
+
+        torch._C._debug_only_display_vmap_fallback_warnings(True)
+
         if not self.training:
-            lognorm = torch.logsumexp(logits, dim=1, keepdim=True)
-            logits_normalized = logits - lognorm
-            grads: list[torch.Tensor] = []
-            all_grads_valid = True
-
+            forces_list = []
             for i in range(len(self.phases)):
-                grad_output = torch.ones(
-                    (data['ptr'].numel() - 1,),
-                    device=data['positions'].device,
-                )
-
-                grad_outputs: Optional[list[Optional[torch.Tensor]]] = [grad_output]
-                grad_result = torch.autograd.grad(
-                    outputs=[logits_normalized[:, i]],
-                    inputs=[data['positions']],
-                    grad_outputs=grad_outputs,
-                    retain_graph=True,
+                vector = torch.zeros_like(logits, device=logits.device)
+                vector[:, i] = 1.0  # select phase i
+                grads = torch.autograd.grad(
+                    logits,
+                    data['positions'],
+                    grad_outputs=vector,
                     create_graph=False,
-                )
+                    retain_graph=True,
+                    allow_unused=False,
+                    materialize_grads=False,
+                )[0]
 
-                # Safely handle the gradient result
-                if grad_result is not None and len(grad_result) > 0:
-                    grad = grad_result[0]
-                    if grad is not None:
-                        grads.append(grad.unsqueeze(0))
-                    else:
-                        all_grads_valid = False
-                        break
-                else:
-                    all_grads_valid = False
-                    break
-
-            # Only create logits_forces if all gradients were valid
-            if all_grads_valid and len(grads) > 0:
-                logits_forces = (-1.0) * torch.cat(grads, dim=0)
+                forces_list.append((-1.0) * grads)
+            logits_forces = torch.stack(forces_list, dim=0)
 
         return {
             'logits': logits,

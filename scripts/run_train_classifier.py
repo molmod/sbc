@@ -134,16 +134,11 @@ def main() -> None:
 
     # Build model
     logging.info("Building model")
-    classifier_readout = ast.literal_eval(args.classifier_readout)
-    classifier_mixing = args.classifier_mixing
-    if classifier_mixing == 0:
-        classifier_mixing = None
+    layer_sizes = ast.literal_eval(args.classifier_layer_sizes)
     model = ClassifierMACE.from_model(
             base_model,
             phases=p_table.phases,
-            classifier=args.classifier,
-            classifier_readout=classifier_readout,
-            classifier_mixing=classifier_mixing,
+            classifier_layer_sizes=layer_sizes,
             )
     model.to(device)
 

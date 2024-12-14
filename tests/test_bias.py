@@ -49,9 +49,7 @@ def test_classifier_mace(tmp_path):
     phases = ['A', 'B', 'C', 'D', 'E']
     config = copy.deepcopy(config_template)
     config['phases'] = phases
-    config['classifier'] = 'EnergyBasedClassifier'
-    config['classifier_readout'] = [16]
-    config['classifier_mixing'] = None
+    config['classifier_layer_sizes'] = [16, 8]
     model = ClassifierMACE(**config)
 
     atoms = Atoms(
@@ -197,14 +195,29 @@ def test_hills_function():
     output = check_grad(func, np.random.uniform(size=(3,)))
     assert output['is_correct']
 
+    centers = np.random.uniform(size=(100, 3))
+    vectors = np.random.uniform(size=(100, 1, 3))
+    vectors /= np.linalg.norm(vectors, axis=2, keepdims=True)
+    height = 10
+    sigma = 1
+    func = functools.partial(
+        hills,
+        centers=centers,
+        height=height,
+        sigma=sigma,
+        vectors=vectors,
+    )
+    assert func(np.random.uniform(size=(3,)))[0] > 0.0
+    output = check_grad(func, np.random.uniform(size=(3,)))
+    assert output['is_correct']
+
+
 
 def test_load_model():
     model = modules.ScaleShiftMACE(**config_template)
     kwargs = {
         'phases': ['A', 'B'],
-        'classifier': 'EnergyBasedClassifier',
-        'classifier_readout': [16],
-        'classifier_mixing': None,
+        'classifier_layer_sizes': [16],
     }
     cls_model = ClassifierMACE.from_model(
         model,

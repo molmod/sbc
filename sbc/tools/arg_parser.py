@@ -99,22 +99,10 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         required=False,
     )
     parser.add_argument(
-        "--classifier",
-        help="type of classifier",
-        type=str,
-        default="EnergyBasedClassifier",
-    )
-    parser.add_argument(
-        "--classifier_readout",
+        "--classifier_layer_sizes",
         help="layers to use during feature readout per layer",
         type=str,
         default="[16]",
-    )
-    parser.add_argument(
-        "--classifier_mixing",
-        help="optional nonlinear mixing of features per layer",
-        type=int,
-        default=None,
     )
     parser.add_argument(
         "--gate",
