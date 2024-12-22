@@ -93,12 +93,14 @@ class ClassifierBlock(torch.nn.Module):
         torch._C._debug_only_display_vmap_fallback_warnings(True)
 
         if not self.training:
+            normalization = torch.logsumexp(logits, dim=1, keepdim=True)
+            logits_n = logits - normalization
             forces_list = []
             for i in range(len(self.phases)):
                 vector = torch.zeros_like(logits, device=logits.device)
                 vector[:, i] = 1.0  # select phase i
                 grads = torch.autograd.grad(
-                    logits,
+                    logits_n,
                     data['positions'],
                     grad_outputs=vector,
                     create_graph=False,

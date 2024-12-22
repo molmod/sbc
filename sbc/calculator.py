@@ -57,11 +57,11 @@ class MACECalculator(Calculator):
         )
 
     def as_data(self, atoms):
-        config = data.config_from_atoms(atoms)
+        config = mace.data.config_from_atoms(atoms)
         data_loader = torch_geometric.dataloader.DataLoader(
             dataset=[
-                data.AtomicData.from_config(
-                    config, z_table=self.z_table, p_table=self.p_table, cutoff=self.r_max
+                mace.data.AtomicData.from_config(
+                    config, z_table=self.z_table, cutoff=self.r_max
                 )
             ],
             batch_size=1,
@@ -203,7 +203,7 @@ class MetadynamicsCalculator(MACECalculator):
         self.sigma = sigma
         self.frequency = frequency
         self.use_svd = use_svd
-        self.svd_dimensions = 2
+        self.svd_dimensions = svd_dimensions
         self.path_hills = path_hills
 
         self.counter = 0
